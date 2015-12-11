@@ -29,6 +29,7 @@ Running the script
 $(cat /tmp/key) --ftpserver ftpserver.local
 
 - Execute to patch multiple using hostlist.csv list
+
     **$ python autopatch.py --username khyron --password $(cat
 /tmp/key) --hostlist hostlist.csv --ftpserver ftpserver.local
 
