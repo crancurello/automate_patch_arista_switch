@@ -1,0 +1,120 @@
+#!/home/khyron/devs/automate_patch_arista_switch/.venv/bin/python
+import subprocess, json, os
+from optparse import OptionParser
+
+usage = "usage: %prog [options] [server_number]\n\
+  server_number: a numeric value corresponding to the server number\n\
+  e.g.: '%prog 1' will ssh into the 1st server in the list."
+
+parser = OptionParser(usage)
+parser.add_option("-x", "--bust-cache", action="store_true",
+    help="refetch servers list from AWS")
+parser.add_option("-u", "--user", action="store",
+          dest="user", default="ubuntu",
+    help="provide user (default: ubuntu)")
+parser.add_option("-i", "--identity", action="store",
+          dest="identity", default="",
+    help="provide identity file")
+parser.add_option("-p", "--profile", action="store",
+          dest="profile", default="",
+    help="provide AWS profile")
+parser.add_option("--ip", action="store",
+          dest="ip", default=0,
+    help="connect using IP instead of DNS")
+(options, args) = parser.parse_args()
+
+cache_dir = os.environ.get('XDG_CACHE_HOME',
+  os.path.join(os.path.expanduser('~'), '.cache'))
+if not os.path.exists(cache_dir):
+  os.makedirs(cache_dir)
+cache_file_list = os.path.join(cache_dir, 'ssh2_list')
+cache_file_num = os.path.join(cache_dir, 'ssh2_num')
+
+num = ''
+if args:
+  if not args[0].isdigit():
+    print "'server_number' must be a numeric value"
+    exit()
+  num = int(args[0])
+
+
+def extract_name(instance):
+  if 'Tags' in instance:
+    for tag in instance['Tags']:
+      if tag['Key'] == 'Name' and tag['Value']:
+        return tag['Value']
+  return '.'
+
+if options.bust_cache or not os.path.exists(cache_file_list) \
+  or options.profile:
+
+  print "Fetching servers..."
+  if os.path.exists(cache_file_num):
+    os.remove(cache_file_num)
+  aws_cmd = 'aws ec2 describe-instances'
+  if options.profile:
+    aws_cmd += ' --profile ' + options.profile
+
+  child = subprocess.Popen(aws_cmd,
+    shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  output = child.stdout.read()
+  error = child.stderr.read()
+  if error:
+    print error
+    print 'Unable to fetch any servers.'
+    exit()
+  with open(cache_file_list, 'w') as f:
+    f.write(output)
+
+output = open(cache_file_list).read()
+parsed = json.loads(output)
+
+all_instances = []
+if not parsed['Reservations']:
+  print 'Coult not find any servers.'
+  if os.path.exists(cache_file_list):
+    os.remove(cache_file_list)
+  exit()
+for instances in parsed['Reservations']:
+  for instance in instances['Instances']:
+    all_instances.append(instance)
+
+if not num:
+  print "\nServers list:\n"
+  for i, instance in enumerate(all_instances, 1):
+    choice = '[%d]' % i
+    name = extract_name(instance)
+    print '%-4s %-55s %-30s' % (choice, instance['PublicDnsName'], name)
+
+default_num = 1
+if os.path.exists(cache_file_num):
+  default_num = open(cache_file_num).read()
+ok = not not num
+while not ok or not num:
+  try:
+    num = raw_input("\nWhich server would you like to connect to [" +
+            str(default_num) + "]? ")
+    if not num:
+      num = int(default_num)
+      break
+    ok = num.isdigit() and 1 <= int(num) <= i
+    if ok:
+      num = int(num)
+      break
+    print "ERR: please enter a value between 1 and " + str(i)
+  except (EOFError, KeyboardInterrupt) as e:
+    print "\nExiting..."
+    exit()
+
+with open(cache_file_num, 'w') as f:
+  f.write(str(num))
+
+instance = all_instances[num - 1]
+dns = [instance['PublicDnsName'], instance['PrivateIpAddress']][options.ip]
+
+identity = ''
+if options.identity and os.path.exists(options.identity):
+  identity = "-i %s " % options.identity
+
+print "\nConnecting to", extract_name(instance), dns
+os.system('ssh %s%s@%s' % (identity, options.user, dns))
